@@ -4,7 +4,6 @@ Build one or more `.unitypackage` artifacts from declarative JSON package defini
 
 ## Inputs
 
-- `version` (required): output filename version suffix
 - `output_dir` (optional, default: `output`)
 - `packages_json` (required): JSON array of package definitions
 
@@ -14,6 +13,7 @@ Build one or more `.unitypackage` artifacts from declarative JSON package defini
 [
   {
     "package_name": "SeeThroughHair",
+    "output_file_name": "SeeThroughHair-1.2.3.unitypackage",
     "include_roots": ["Assets", "Editor", "Runtime", "SeeThroughHair.asmdef"],
     "target_root": "Assets/SeeThroughHair",
     "script_allowlist_file": ".github/fakeshadow-scripts.txt",
@@ -26,6 +26,7 @@ Build one or more `.unitypackage` artifacts from declarative JSON package defini
 
 Fields:
 - `package_name` (string, required)
+- `output_file_name` (string, required, must end with `.unitypackage`)
 - `include_roots` (string[], required)
 - `target_root` (string, required)
 - `script_allowlist_file` (string, optional)
@@ -43,12 +44,12 @@ Fields:
 - name: Build unitypackage
   uses: weasel-club/unitypackage-release-action@v1
   with:
-    version: ${{ github.ref_name }}
     output_dir: output
     packages_json: |
       [
         {
           "package_name": "MMDEyeFix",
+          "output_file_name": "MMDEyeFix-${{ github.ref_name }}.unitypackage",
           "include_roots": ["Editor", "Runtime", "package.json"],
           "target_root": "Assets/MMDEyeFix"
         }

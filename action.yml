@@ -3,9 +3,6 @@ name: Build Unitypackage
 description: Build one or more .unitypackage artifacts from JSON package definitions.
 
 inputs:
-  version:
-    description: Release version string
-    required: true
   output_dir:
     description: Output directory path
     required: false
@@ -28,7 +25,6 @@ runs:
       run: |
         set -euo pipefail
         python3 "$GITHUB_ACTION_PATH/scripts/build_unitypackage.py" \
-          --version "${{ inputs.version }}" \
           --output-dir "${{ inputs.output_dir }}" \
           --packages-json '${{ inputs.packages_json }}' \
           --github-output "$GITHUB_OUTPUT"

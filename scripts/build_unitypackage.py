@@ -16,6 +16,7 @@ VALID_MISSING_META_POLICY = {"error", "skip"}
 @dataclass(frozen=True)
 class PackageConfig:
     package_name: str
+    output_file_name: str
     include_roots: list[Path]
     target_root: Path
     script_allowlist_file: Path | None
@@ -117,7 +118,7 @@ def collect_directory_entries(root: Path) -> Iterable[Path]:
         stack.extend(child_dirs)
 
 
-def build_single_package(project_root: Path, output_dir: Path, version: str, config: PackageConfig) -> Path:
+def build_single_package(project_root: Path, output_dir: Path, config: PackageConfig) -> Path:
     script_allowlist: set[Path] | None = None
     if config.script_allowlist_file is not None:
         script_allowlist = read_script_allowlist(project_root, config.script_allowlist_file)
@@ -173,7 +174,7 @@ def build_single_package(project_root: Path, output_dir: Path, version: str, con
 
                 add_asset(file_path, config.target_root / rel_file, work_dir, config.missing_meta_policy)
 
-    package_path = output_dir / f"{config.package_name}-{version}.unitypackage"
+    package_path = output_dir / config.output_file_name
     if package_path.exists():
         package_path.unlink()
 
@@ -185,17 +186,24 @@ def build_single_package(project_root: Path, output_dir: Path, version: str, con
 
 
 def parse_package_config(raw: dict) -> PackageConfig:
-    required_fields = ("package_name", "include_roots", "target_root")
+    required_fields = ("package_name", "output_file_name", "include_roots", "target_root")
     for field in required_fields:
         if field not in raw:
             raise ConfigError(f"missing required field '{field}' in package definition")
 
     package_name = raw["package_name"]
+    output_file_name = raw["output_file_name"]
     include_roots_raw = raw["include_roots"]
     target_root = raw["target_root"]
 
     if not isinstance(package_name, str) or not package_name:
         raise ConfigError("package_name must be a non-empty string")
+    if not isinstance(output_file_name, str) or not output_file_name:
+        raise ConfigError("output_file_name must be a non-empty string")
+    if "/" in output_file_name or "\\" in output_file_name:
+        raise ConfigError("output_file_name must be a filename, not a path")
+    if not output_file_name.endswith(".unitypackage"):
+        raise ConfigError("output_file_name must end with .unitypackage")
     if not isinstance(include_roots_raw, list) or not include_roots_raw:
         raise ConfigError("include_roots must be a non-empty string array")
     if not isinstance(target_root, str) or not target_root:
@@ -232,6 +240,7 @@ def parse_package_config(raw: dict) -> PackageConfig:
 
     return PackageConfig(
         package_name=package_name,
+        output_file_name=output_file_name,
         include_roots=include_roots,
         target_root=Path(target_root),
         script_allowlist_file=script_allowlist_file,
@@ -243,7 +252,6 @@ def parse_package_config(raw: dict) -> PackageConfig:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Build Unitypackage artifacts from JSON package definitions")
-    parser.add_argument("--version", required=True)
     parser.add_argument("--output-dir", default="output")
     parser.add_argument("--packages-json", required=True)
     parser.add_argument("--github-output", required=False)
@@ -286,7 +294,7 @@ def main() -> int:
 
     generated_files: list[Path] = []
     for config in package_configs:
-        generated = build_single_package(project_root, output_dir, args.version, config)
+        generated = build_single_package(project_root, output_dir, config)
         generated_files.append(generated)
 
     github_output = Path(args.github_output) if args.github_output else None
