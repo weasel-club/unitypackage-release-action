@@ -1,0 +1,34 @@
+name: Build Unitypackage
+
+description: Build one or more .unitypackage artifacts from JSON package definitions.
+
+inputs:
+  version:
+    description: Release version string
+    required: true
+  output_dir:
+    description: Output directory path
+    required: false
+    default: output
+  packages_json:
+    description: JSON array of package definitions
+    required: true
+
+outputs:
+  generated_files:
+    description: Newline-separated generated .unitypackage relative paths
+    value: ${{ steps.build.outputs.generated_files }}
+
+runs:
+  using: composite
+  steps:
+    - name: Build unitypackages
+      id: build
+      shell: bash
+      run: |
+        set -euo pipefail
+        python3 "$GITHUB_ACTION_PATH/scripts/build_unitypackage.py" \
+          --version "${{ inputs.version }}" \
+          --output-dir "${{ inputs.output_dir }}" \
+          --packages-json '${{ inputs.packages_json }}' \
+          --github-output "$GITHUB_OUTPUT"
