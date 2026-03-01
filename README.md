@@ -15,8 +15,8 @@ Build one or more `.unitypackage` artifacts from declarative JSON package defini
     "package_name": "SeeThroughHair",
     "output_file_name": "SeeThroughHair-1.2.3.unitypackage",
     "include_roots": ["Assets", "Editor", "Runtime", "SeeThroughHair.asmdef"],
+    "allowlist": ["Assets/**/*", "Editor/**/*", "Runtime/**/*", "SeeThroughHair.asmdef"],
     "target_root": "Assets/SeeThroughHair",
-    "script_allowlist_file": ".github/fakeshadow-scripts.txt",
     "exclude_paths": ["Assets/Legacy"],
     "missing_meta_policy": "error",
     "skip_hidden": true
@@ -28,8 +28,8 @@ Fields:
 - `package_name` (string, required)
 - `output_file_name` (string, required, must end with `.unitypackage`)
 - `include_roots` (string[], required)
+- `allowlist` (string[], required, glob patterns relative to repository root)
 - `target_root` (string, required)
-- `script_allowlist_file` (string, optional)
 - `exclude_paths` (string[], optional)
 - `missing_meta_policy` (`error` or `skip`, optional, default `error`)
 - `skip_hidden` (boolean, optional, default `true`)
@@ -51,6 +51,7 @@ Fields:
           "package_name": "MMDEyeFix",
           "output_file_name": "MMDEyeFix-${{ github.ref_name }}.unitypackage",
           "include_roots": ["Editor", "Runtime", "package.json"],
+          "allowlist": ["Editor/**/*", "Runtime/**/*", "package.json"],
           "target_root": "Assets/MMDEyeFix"
         }
       ]

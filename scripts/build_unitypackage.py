@@ -2,13 +2,13 @@
 from __future__ import annotations
 
 import argparse
+import fnmatch
 import hashlib
 import json
 import tarfile
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import shutil
-from typing import Iterable
 
 VALID_MISSING_META_POLICY = {"error", "skip"}
 
@@ -18,8 +18,8 @@ class PackageConfig:
     package_name: str
     output_file_name: str
     include_roots: list[Path]
+    allowlist: list[str]
     target_root: Path
-    script_allowlist_file: Path | None
     exclude_paths: set[Path]
     missing_meta_policy: str
     skip_hidden: bool
@@ -84,50 +84,26 @@ def is_excluded(path: Path, excludes: set[Path]) -> bool:
     return False
 
 
-def read_script_allowlist(project_root: Path, list_path: Path) -> set[Path]:
-    absolute_list_path = project_root / list_path
-    if not absolute_list_path.exists():
-        raise ConfigError(f"script list not found: {list_path.as_posix()}")
-
-    allowlist: set[Path] = set()
-    for raw_line in absolute_list_path.read_text(encoding="utf-8").splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#"):
-            continue
-
-        rel_path = Path(line)
-        if rel_path.suffix != ".cs":
-            raise ConfigError(f"only .cs paths are allowed in script list: {line}")
-
-        full_path = project_root / rel_path
-        if not full_path.exists():
-            raise ConfigError(f"script in list does not exist: {line}")
-
-        allowlist.add(rel_path)
-
-    return allowlist
+def normalize_glob(pattern: str) -> str:
+    if pattern.startswith("./"):
+        return pattern[2:]
+    return pattern
 
 
-def collect_directory_entries(root: Path) -> Iterable[Path]:
-    stack = [root]
-    while stack:
-        current = stack.pop()
-        yield current
+def matches_allowlist(rel_path: Path, allowlist: list[str]) -> bool:
+    rel_posix = rel_path.as_posix()
+    pure_rel = PurePosixPath(rel_posix)
+    for raw_pattern in allowlist:
+        pattern = normalize_glob(raw_pattern)
+        if pure_rel.match(pattern):
+            return True
+        if fnmatch.fnmatch(rel_posix, pattern):
+            return True
+    return False
 
-        child_dirs = sorted((p for p in current.iterdir() if p.is_dir()), reverse=True)
-        stack.extend(child_dirs)
 
-
-def build_single_package(project_root: Path, output_dir: Path, config: PackageConfig) -> Path:
-    script_allowlist: set[Path] | None = None
-    if config.script_allowlist_file is not None:
-        script_allowlist = read_script_allowlist(project_root, config.script_allowlist_file)
-
-    work_dir = output_dir / f"unitypackage-{config.package_name}"
-    shutil.rmtree(work_dir, ignore_errors=True)
-    work_dir.mkdir(parents=True, exist_ok=True)
-
-    add_virtual_folder(config.target_root, work_dir)
+def collect_included_files(project_root: Path, config: PackageConfig) -> list[Path]:
+    included: set[Path] = set()
 
     for include_root in config.include_roots:
         source = project_root / include_root
@@ -143,36 +119,71 @@ def build_single_package(project_root: Path, output_dir: Path, config: PackageCo
         if source.is_file():
             if source.suffix == ".meta":
                 continue
-
-            if script_allowlist is not None and source.suffix == ".cs" and rel_source not in script_allowlist:
+            if not matches_allowlist(rel_source, config.allowlist):
                 continue
-
-            add_asset(source, config.target_root / source.name, work_dir, config.missing_meta_policy)
+            included.add(rel_source)
             continue
 
-        for current in collect_directory_entries(source):
-            rel_path = current.relative_to(project_root)
-
-            if config.skip_hidden and is_hidden(rel_path):
+        for file_path in sorted(source.rglob("*")):
+            if not file_path.is_file():
                 continue
-            if is_excluded(rel_path, config.exclude_paths):
+            if file_path.suffix == ".meta":
                 continue
 
-            add_asset(current, config.target_root / rel_path, work_dir, config.missing_meta_policy)
+            rel_file = file_path.relative_to(project_root)
+            if config.skip_hidden and is_hidden(rel_file):
+                continue
+            if is_excluded(rel_file, config.exclude_paths):
+                continue
+            if not matches_allowlist(rel_file, config.allowlist):
+                continue
 
-            for file_path in sorted(p for p in current.iterdir() if p.is_file()):
-                if file_path.suffix == ".meta":
-                    continue
+            included.add(rel_file)
 
-                rel_file = file_path.relative_to(project_root)
-                if config.skip_hidden and is_hidden(rel_file):
-                    continue
-                if is_excluded(rel_file, config.exclude_paths):
-                    continue
-                if script_allowlist is not None and file_path.suffix == ".cs" and rel_file not in script_allowlist:
-                    continue
+    return sorted(included, key=lambda p: p.as_posix())
 
-                add_asset(file_path, config.target_root / rel_file, work_dir, config.missing_meta_policy)
+
+def collect_required_directories(included_files: list[Path]) -> list[Path]:
+    directories: set[Path] = set()
+    for rel_file in included_files:
+        parent = rel_file.parent
+        while parent != Path("."):
+            directories.add(parent)
+            parent = parent.parent
+    return sorted(directories, key=lambda p: (len(p.parts), p.as_posix()))
+
+
+def build_single_package(project_root: Path, output_dir: Path, config: PackageConfig) -> Path:
+    included_files = collect_included_files(project_root, config)
+    if not included_files:
+        raise ConfigError(
+            f"no files matched allowlist for package '{config.package_name}'. "
+            "check include_roots and allowlist patterns"
+        )
+
+    included_dirs = collect_required_directories(included_files)
+
+    work_dir = output_dir / f"unitypackage-{config.package_name}"
+    shutil.rmtree(work_dir, ignore_errors=True)
+    work_dir.mkdir(parents=True, exist_ok=True)
+
+    add_virtual_folder(config.target_root, work_dir)
+
+    for rel_dir in included_dirs:
+        add_asset(
+            project_root / rel_dir,
+            config.target_root / rel_dir,
+            work_dir,
+            config.missing_meta_policy,
+        )
+
+    for rel_file in included_files:
+        add_asset(
+            project_root / rel_file,
+            config.target_root / rel_file,
+            work_dir,
+            config.missing_meta_policy,
+        )
 
     package_path = output_dir / config.output_file_name
     if package_path.exists():
@@ -186,7 +197,7 @@ def build_single_package(project_root: Path, output_dir: Path, config: PackageCo
 
 
 def parse_package_config(raw: dict) -> PackageConfig:
-    required_fields = ("package_name", "output_file_name", "include_roots", "target_root")
+    required_fields = ("package_name", "output_file_name", "include_roots", "allowlist", "target_root")
     for field in required_fields:
         if field not in raw:
             raise ConfigError(f"missing required field '{field}' in package definition")
@@ -194,6 +205,7 @@ def parse_package_config(raw: dict) -> PackageConfig:
     package_name = raw["package_name"]
     output_file_name = raw["output_file_name"]
     include_roots_raw = raw["include_roots"]
+    allowlist_raw = raw["allowlist"]
     target_root = raw["target_root"]
 
     if not isinstance(package_name, str) or not package_name:
@@ -206,6 +218,8 @@ def parse_package_config(raw: dict) -> PackageConfig:
         raise ConfigError("output_file_name must end with .unitypackage")
     if not isinstance(include_roots_raw, list) or not include_roots_raw:
         raise ConfigError("include_roots must be a non-empty string array")
+    if not isinstance(allowlist_raw, list) or not allowlist_raw:
+        raise ConfigError("allowlist must be a non-empty string array")
     if not isinstance(target_root, str) or not target_root:
         raise ConfigError("target_root must be a non-empty string")
 
@@ -215,11 +229,11 @@ def parse_package_config(raw: dict) -> PackageConfig:
             raise ConfigError("include_roots must contain only non-empty strings")
         include_roots.append(Path(entry))
 
-    script_allowlist_file: Path | None = None
-    if "script_allowlist_file" in raw and raw["script_allowlist_file"] is not None:
-        if not isinstance(raw["script_allowlist_file"], str) or not raw["script_allowlist_file"]:
-            raise ConfigError("script_allowlist_file must be a non-empty string when provided")
-        script_allowlist_file = Path(raw["script_allowlist_file"])
+    allowlist: list[str] = []
+    for entry in allowlist_raw:
+        if not isinstance(entry, str) or not entry:
+            raise ConfigError("allowlist must contain only non-empty strings")
+        allowlist.append(entry)
 
     exclude_paths: set[Path] = set()
     if "exclude_paths" in raw:
@@ -242,8 +256,8 @@ def parse_package_config(raw: dict) -> PackageConfig:
         package_name=package_name,
         output_file_name=output_file_name,
         include_roots=include_roots,
+        allowlist=allowlist,
         target_root=Path(target_root),
-        script_allowlist_file=script_allowlist_file,
         exclude_paths=exclude_paths,
         missing_meta_policy=missing_meta_policy,
         skip_hidden=skip_hidden,
