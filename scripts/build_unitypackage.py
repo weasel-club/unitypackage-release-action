@@ -18,7 +18,7 @@ class PackageConfig:
     package_name: str
     output_file_name: str
     include_roots: list[Path]
-    allowlist: list[str]
+    allowlist: list[str] | None
     target_root: Path
     exclude_paths: set[Path]
     missing_meta_policy: str
@@ -90,7 +90,10 @@ def normalize_glob(pattern: str) -> str:
     return pattern
 
 
-def matches_allowlist(rel_path: Path, allowlist: list[str]) -> bool:
+def matches_allowlist(rel_path: Path, allowlist: list[str] | None) -> bool:
+    if allowlist is None:
+        return True
+
     rel_posix = rel_path.as_posix()
     pure_rel = PurePosixPath(rel_posix)
     for raw_pattern in allowlist:
@@ -156,10 +159,7 @@ def collect_required_directories(included_files: list[Path]) -> list[Path]:
 def build_single_package(project_root: Path, output_dir: Path, config: PackageConfig) -> Path:
     included_files = collect_included_files(project_root, config)
     if not included_files:
-        raise ConfigError(
-            f"no files matched allowlist for package '{config.package_name}'. "
-            "check include_roots and allowlist patterns"
-        )
+        raise ConfigError(f"no files selected for package '{config.package_name}'")
 
     included_dirs = collect_required_directories(included_files)
 
@@ -197,7 +197,7 @@ def build_single_package(project_root: Path, output_dir: Path, config: PackageCo
 
 
 def parse_package_config(raw: dict) -> PackageConfig:
-    required_fields = ("package_name", "output_file_name", "include_roots", "allowlist", "target_root")
+    required_fields = ("package_name", "output_file_name", "include_roots", "target_root")
     for field in required_fields:
         if field not in raw:
             raise ConfigError(f"missing required field '{field}' in package definition")
@@ -205,7 +205,6 @@ def parse_package_config(raw: dict) -> PackageConfig:
     package_name = raw["package_name"]
     output_file_name = raw["output_file_name"]
     include_roots_raw = raw["include_roots"]
-    allowlist_raw = raw["allowlist"]
     target_root = raw["target_root"]
 
     if not isinstance(package_name, str) or not package_name:
@@ -218,8 +217,6 @@ def parse_package_config(raw: dict) -> PackageConfig:
         raise ConfigError("output_file_name must end with .unitypackage")
     if not isinstance(include_roots_raw, list) or not include_roots_raw:
         raise ConfigError("include_roots must be a non-empty string array")
-    if not isinstance(allowlist_raw, list) or not allowlist_raw:
-        raise ConfigError("allowlist must be a non-empty string array")
     if not isinstance(target_root, str) or not target_root:
         raise ConfigError("target_root must be a non-empty string")
 
@@ -229,11 +226,18 @@ def parse_package_config(raw: dict) -> PackageConfig:
             raise ConfigError("include_roots must contain only non-empty strings")
         include_roots.append(Path(entry))
 
-    allowlist: list[str] = []
-    for entry in allowlist_raw:
-        if not isinstance(entry, str) or not entry:
-            raise ConfigError("allowlist must contain only non-empty strings")
-        allowlist.append(entry)
+    allowlist: list[str] | None = None
+    if "allowlist" in raw and raw["allowlist"] is not None:
+        allowlist_raw = raw["allowlist"]
+        if not isinstance(allowlist_raw, list) or not allowlist_raw:
+            raise ConfigError("allowlist must be a non-empty string array when provided")
+
+        parsed_allowlist: list[str] = []
+        for entry in allowlist_raw:
+            if not isinstance(entry, str) or not entry:
+                raise ConfigError("allowlist must contain only non-empty strings")
+            parsed_allowlist.append(entry)
+        allowlist = parsed_allowlist
 
     exclude_paths: set[Path] = set()
     if "exclude_paths" in raw:

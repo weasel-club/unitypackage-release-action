@@ -28,7 +28,7 @@ Fields:
 - `package_name` (string, required)
 - `output_file_name` (string, required, must end with `.unitypackage`)
 - `include_roots` (string[], required)
-- `allowlist` (string[], required, glob patterns relative to repository root)
+- `allowlist` (string[], optional, glob patterns relative to repository root)
 - `target_root` (string, required)
 - `exclude_paths` (string[], optional)
 - `missing_meta_policy` (`error` or `skip`, optional, default `error`)
