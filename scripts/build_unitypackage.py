@@ -5,7 +5,7 @@ import argparse
 import fnmatch
 import hashlib
 import json
-import tarfile
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 import shutil
@@ -105,9 +105,14 @@ def matches_allowlist(rel_path: Path, allowlist: list[str] | None) -> bool:
     return False
 
 
-def collect_included_files(project_root: Path, config: PackageConfig) -> list[Path]:
-    included: set[Path] = set()
+def build_single_package(project_root: Path, output_dir: Path, config: PackageConfig) -> Path:
+    work_dir = output_dir / f"unitypackage-{config.package_name}"
+    shutil.rmtree(work_dir, ignore_errors=True)
+    work_dir.mkdir(parents=True, exist_ok=True)
 
+    add_virtual_folder(config.target_root, work_dir)
+
+    selected_count = 0
     for include_root in config.include_roots:
         source = project_root / include_root
         if not source.exists():
@@ -124,75 +129,56 @@ def collect_included_files(project_root: Path, config: PackageConfig) -> list[Pa
                 continue
             if not matches_allowlist(rel_source, config.allowlist):
                 continue
-            included.add(rel_source)
+            add_asset(source, config.target_root / source.name, work_dir, config.missing_meta_policy)
+            selected_count += 1
             continue
 
-        for file_path in sorted(source.rglob("*")):
-            if not file_path.is_file():
+        stack = [source]
+        while stack:
+            current = stack.pop()
+            rel_current = current.relative_to(project_root)
+            if config.skip_hidden and is_hidden(rel_current):
                 continue
-            if file_path.suffix == ".meta":
-                continue
-
-            rel_file = file_path.relative_to(project_root)
-            if config.skip_hidden and is_hidden(rel_file):
-                continue
-            if is_excluded(rel_file, config.exclude_paths):
-                continue
-            if not matches_allowlist(rel_file, config.allowlist):
+            if is_excluded(rel_current, config.exclude_paths):
                 continue
 
-            included.add(rel_file)
+            add_asset(current, config.target_root / rel_current, work_dir, config.missing_meta_policy)
+            selected_count += 1
 
-    return sorted(included, key=lambda p: p.as_posix())
+            child_dirs = sorted([p for p in current.iterdir() if p.is_dir()], reverse=True)
+            stack.extend(child_dirs)
 
+            child_files = sorted([p for p in current.iterdir() if p.is_file() and p.suffix != ".meta"])
+            for file_path in child_files:
+                rel_file = file_path.relative_to(project_root)
+                if config.skip_hidden and is_hidden(rel_file):
+                    continue
+                if is_excluded(rel_file, config.exclude_paths):
+                    continue
+                if not matches_allowlist(rel_file, config.allowlist):
+                    continue
+                add_asset(file_path, config.target_root / rel_file, work_dir, config.missing_meta_policy)
+                selected_count += 1
 
-def collect_required_directories(included_files: list[Path]) -> list[Path]:
-    directories: set[Path] = set()
-    for rel_file in included_files:
-        parent = rel_file.parent
-        while parent != Path("."):
-            directories.add(parent)
-            parent = parent.parent
-    return sorted(directories, key=lambda p: (len(p.parts), p.as_posix()))
-
-
-def build_single_package(project_root: Path, output_dir: Path, config: PackageConfig) -> Path:
-    included_files = collect_included_files(project_root, config)
-    if not included_files:
+    if selected_count == 0:
         raise ConfigError(f"no files selected for package '{config.package_name}'")
-
-    included_dirs = collect_required_directories(included_files)
-
-    work_dir = output_dir / f"unitypackage-{config.package_name}"
-    shutil.rmtree(work_dir, ignore_errors=True)
-    work_dir.mkdir(parents=True, exist_ok=True)
-
-    add_virtual_folder(config.target_root, work_dir)
-
-    for rel_dir in included_dirs:
-        add_asset(
-            project_root / rel_dir,
-            config.target_root / rel_dir,
-            work_dir,
-            config.missing_meta_policy,
-        )
-
-    for rel_file in included_files:
-        add_asset(
-            project_root / rel_file,
-            config.target_root / rel_file,
-            work_dir,
-            config.missing_meta_policy,
-        )
 
     package_path = output_dir / config.output_file_name
     if package_path.exists():
         package_path.unlink()
 
-    with tarfile.open(package_path, "w:gz", compresslevel=1) as tar:
-        for entry in sorted(work_dir.iterdir()):
-            tar.add(entry, arcname=entry.name)
+    tar_path = output_dir / f"{config.output_file_name}.tar"
+    if tar_path.exists():
+        tar_path.unlink()
 
+    entries = sorted([p.name for p in work_dir.iterdir()])
+    subprocess.run(["tar", "-cf", str(tar_path), *entries], cwd=work_dir, check=True)
+    subprocess.run(["gzip", "-1", "-f", str(tar_path)], check=True)
+
+    gz_path = output_dir / f"{config.output_file_name}.tar.gz"
+    if not gz_path.exists():
+        raise ConfigError(f"failed to generate gzip archive for '{config.package_name}'")
+    gz_path.rename(package_path)
     return package_path
 
 
